@@ -120,3 +120,69 @@ def auto_resolve(git: GitRunner, repo: Path, machine: str) -> list[ConflictFile]
         else:
             remaining.append(cf)
     return remaining
+
+
+# ---- テキストの競合を、あとからユーザーに選んでもらって解決する ----
+
+def start_resolution(repo: Path, ctx, lfs_available: bool = True) -> list[ConflictFile]:
+    """合体をやり直す。画像などは自動で解決し、ユーザーに選んでほしいテキストの競合だけを返す。"""
+    from .changes import commit_local_changes, identity_config
+    from .sync import ahead_behind, current_branch
+
+    repo = Path(repo)
+    git = GitRunner(repo, log=ctx.log)
+    if not (repo / ".git" / "MERGE_HEAD").exists():
+        commit_local_changes(git, repo, ctx, lfs_available)
+        branch = current_branch(git)
+        if branch is None:
+            raise ValueError("どのブランチも開かれていません。")
+        git.run("fetch", "origin")
+        counts = ahead_behind(git, branch)
+        if not counts or counts[1] == 0:
+            return []
+        merger = GitRunner(repo, log=git.log, extra_config=identity_config(git, ctx))
+        if merger.run("merge", "--no-edit", f"origin/{branch}", check=False).returncode == 0:
+            return []
+    remaining = auto_resolve(git, repo, ctx.machine_name)
+    if not remaining:
+        GitRunner(repo, log=git.log, extra_config=identity_config(git, ctx)).run("commit", "--no-edit", "-q")
+    return remaining
+
+
+def finish_resolution(repo: Path, choices: dict[str, Side], ctx,
+                      full_name: str | None = None):
+    """ユーザーの選んだ版で合体を完了して、GitHub に送る。"""
+    from .changes import identity_config
+    from .gitrunner import GitError
+    from .models import RepoResult, Status
+    from .sync import _explain, ahead_behind, current_branch
+
+    repo = Path(repo)
+    git = GitRunner(repo, log=ctx.log)
+    result = RepoResult(full_name or repo.name, repo, Status.PUSHED_AND_PULLED)
+    pending = conflicted_paths(git)
+    missing = [p for p in pending if p not in choices]
+    if missing:
+        raise ValueError(f"まだ選んでいないファイルがあります: {', '.join(missing)}")
+    try:
+        if (repo / ".git" / "MERGE_HEAD").exists():
+            result.pulled_commits = int(git.run("rev-list", "--count", "HEAD..MERGE_HEAD").stdout.strip() or 0)
+            for path in pending:
+                keep_both(git, repo, path, ctx.machine_name, keep=choices[path])
+            GitRunner(repo, log=git.log, extra_config=identity_config(git, ctx)).run("commit", "--no-edit", "-q")
+        branch = current_branch(git)
+        counts = ahead_behind(git, branch) if branch else None
+        if branch and (counts is None or counts[0] > 0):
+            git.run("push", "-u", "origin", branch)
+        elif not result.pulled_commits:
+            result.status = Status.UP_TO_DATE
+    except GitError as e:
+        result.status = Status.ERROR
+        result.error = _explain(e.stderr)
+    return result
+
+
+def cancel_resolution(repo: Path) -> None:
+    repo = Path(repo)
+    if (repo / ".git" / "MERGE_HEAD").exists():
+        GitRunner(repo).run("merge", "--abort")

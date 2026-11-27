@@ -19,3 +19,18 @@ def isolated_git(tmp_path_factory, monkeypatch):
         subprocess.run(["git", "config", "--global", key, value], check=True)
     subprocess.run(["git", "lfs", "install", "--skip-repo"], check=True, capture_output=True)
     return cfg
+
+
+from datetime import datetime  # noqa: E402
+
+from peers_sync.models import SyncContext  # noqa: E402
+
+
+def make_ctx(machine: str) -> SyncContext:
+    return SyncContext(machine, "me", confirm=lambda q: True,
+                       now=lambda: datetime(2026, 11, 27, 14, 32))
+
+
+@pytest.fixture
+def ctx():
+    return make_ctx("PC-A")

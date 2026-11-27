@@ -15,11 +15,13 @@ from typing import Callable
 from ..config import Settings, save_settings
 from ..credentials import LoginError
 from ..engine import SyncAbort
+from ..installer import InstallError, describe
 from ..messages import LFS_MISSING, status_text
 from ..models import RepoResult, Status, SyncContext
 
 SYNC_LABEL = "🔄  ぜんぶ同期"
 LOGIN_LABEL = "🔑  GitHub でログイン"
+INSTALL_LABEL = "🛠  必要なものを自動で入れる"
 
 HELP_TEXT = """peers Sync の使い方
 
@@ -45,6 +47,8 @@ class Services:
     logout: Callable[[], None]
     make_api: Callable[[str], object]
     prerequisites: Callable[[], "tuple[str | None, bool]"]
+    missing_tools: Callable[[], list] = lambda: []
+    install: Callable[[list], str] = lambda missing: ""
 
 
 def _font_family() -> str:
@@ -68,6 +72,10 @@ class MainWindow(tk.Tk):
         self.results: dict[str, RepoResult] = {}
         self._queue: queue.Queue = queue.Queue()
         self._ctx: SyncContext | None = None
+        self.missing: list[str] = []
+        self._recheck_after_done = False
+        self._auto_sync_after_login = False
+        self._pending_message = ""
 
         self.title("peers Sync")
         self.geometry("640x560")
@@ -108,6 +116,12 @@ class MainWindow(tk.Tk):
         self.log_box = tk.Text(self, height=8, wrap="none", font=("Courier", 10))
 
     def _startup_checks(self) -> None:
+        self.missing = self.services.missing_tools()
+        if self.missing:
+            self.main_button.config(text=INSTALL_LABEL, state="normal")
+            self._message.set(f"使い始める前に、{describe(self.missing)} が必要です。"
+                              "上のボタンを押すと、自動で入れます。")
+            return
         problem, self.lfs_available = self.services.prerequisites()
         if problem:
             self._message.set(problem)
@@ -149,6 +163,11 @@ class MainWindow(tk.Tk):
             return
         self.busy = True
         self.main_button.config(state="disabled")
+        if self.missing:
+            gc.disable()
+            self._message.set("必要なものを入れています…（数分かかることがあります）")
+            threading.Thread(target=self._install_worker, args=(list(self.missing),), daemon=True).start()
+            return
         # 裏の処理の最中に Python の後片付け（GC）が走ると、画面の部品がそのスレッドで壊されて
         # Mac でアプリが落ちることがある。裏の処理が終わるまで止めて、終わったら画面側で片付ける。
         gc.disable()
@@ -166,6 +185,16 @@ class MainWindow(tk.Tk):
         threading.Thread(target=self._sync_worker, args=(self._ctx,), daemon=True).start()
 
     # ---------- 別スレッドで動く処理 ----------
+    def _install_worker(self, missing: list[str]) -> None:
+        try:
+            self._queue.put(("installed", self.services.install(missing)))
+        except InstallError as e:
+            self._queue.put(("abort", str(e)))
+        except Exception as e:
+            self._queue.put(("abort", f"自動で入れられませんでした（{type(e).__name__}）。"))
+        finally:
+            self._queue.put(("done",))
+
     def _login_worker(self) -> None:
         try:
             _, token = self.services.login()
@@ -228,17 +257,32 @@ class MainWindow(tk.Tk):
                 self.settings.github_login = login
                 self._save()
                 self._set_token(token)
-                self._message.set(f"{login} としてログインしました。「ぜんぶ同期」を押してください。")
+                self._message.set(f"{login} としてログインしました。続けて同期を始めます…")
+                self._auto_sync_after_login = True
+            elif kind == "installed":
+                self._pending_message = item[1]
+                self._recheck_after_done = True
             elif kind == "abort":
                 self._message.set(item[1])
             elif kind == "finished":
                 self._finish_sync()
+                self._save()  # 自動で見つけたリポジトリの場所などを覚えておく
             elif kind == "done":
                 gc.enable()
                 gc.collect()
                 self.busy = False
                 self.main_button.config(state="normal")
                 self._render_log()
+                if self._recheck_after_done:
+                    self._recheck_after_done = False
+                    self._startup_checks()
+                    if self._pending_message:
+                        current = self._message.get()
+                        self._message.set(self._pending_message + (f"\n{current}" if current else ""))
+                        self._pending_message = ""
+                if self._auto_sync_after_login:
+                    self._auto_sync_after_login = False
+                    self.on_sync_clicked()
 
     def show_result(self, r: RepoResult) -> None:
         self.results[r.full_name] = r

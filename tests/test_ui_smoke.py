@@ -244,3 +244,67 @@ def test_conflict_dialog_runs_git_off_ui_thread_and_passes_lfs_flag(tk_ok, setti
     assert seen["finish_main"] is False and seen["choices"] == {"README.md": "mine"}
     assert done == [(Status.PUSHED_AND_PULLED, True)]
     w.destroy()
+
+
+def test_missing_tools_turn_button_into_installer(tk_ok, settings, tmp_path):
+    from peers_sync.ui.main_window import INSTALL_LABEL
+    w = make_window(settings, tmp_path, missing_tools=lambda: ["git"])
+    assert w.main_button_text() == INSTALL_LABEL
+    assert str(w.main_button["state"]) == "normal" and "Git" in w.message_text()
+    w.destroy()
+
+
+def test_install_then_recheck_restores_sync_button(tk_ok, settings, tmp_path):
+    answers = iter([["git-lfs"], []])
+    installed = []
+    w = make_window(settings, tmp_path, missing_tools=lambda: next(answers),
+                    install=lambda m: installed.append(m) or "Git LFS を入れました。")
+    w.on_sync_clicked()
+    pump_until_idle(w)
+    assert installed == [["git-lfs"]]
+    assert "ぜんぶ同期" in w.main_button_text() and "入れました" in w.message_text()
+    w.destroy()
+
+
+def test_install_failure_shows_message_and_reenables(tk_ok, settings, tmp_path):
+    from peers_sync.installer import InstallError
+
+    def bad(m):
+        raise InstallError("失敗しました")
+
+    w = make_window(settings, tmp_path, missing_tools=lambda: ["git"], install=bad)
+    w.on_sync_clicked()
+    pump_until_idle(w)
+    assert "失敗しました" in w.message_text() and str(w.main_button["state"]) == "normal"
+    w.destroy()
+
+
+def test_login_success_starts_first_sync_automatically(tk_ok, settings, tmp_path):
+    state = {"token": None}
+    calls = []
+
+    def do_login():
+        state["token"] = ("me", "tok")
+        return state["token"]
+
+    w = make_window(settings, tmp_path, get_token=lambda: state["token"], login=do_login,
+                    sync_all=lambda *a, **k: calls.append(1) or [])
+    w.on_sync_clicked()
+    pump_until_idle(w)
+    pump_until_idle(w)
+    assert calls == [1]
+    w.destroy()
+
+
+def test_discovered_paths_are_saved_after_sync(tk_ok, settings, tmp_path):
+    from peers_sync.config import load_settings
+
+    def fake_sync_all(s, api, ctx, on_result, lfs_available):
+        s.repo_paths["me/x"] = tmp_path / "found"
+        return []
+
+    w = make_window(settings, tmp_path, sync_all=fake_sync_all)
+    w.on_sync_clicked()
+    pump_until_idle(w)
+    assert load_settings(tmp_path / "s.json").repo_paths == {"me/x": tmp_path / "found"}
+    w.destroy()

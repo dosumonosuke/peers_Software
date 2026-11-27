@@ -27,10 +27,10 @@ def ensure_tool_path() -> None:
     from .installer import tool_bin_dir
     extras: list[str] = []
     if sys.platform == "win32":
-        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
-        git_cmd = Path(program_files) / "Git" / "cmd"
-        if git_cmd.is_dir():
-            extras.append(str(git_cmd))
+        candidates = [Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "cmd"]
+        if os.environ.get("LOCALAPPDATA"):  # ユーザー用にインストールした Git
+            candidates.append(Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Git" / "cmd")
+        extras += [str(c) for c in candidates if c.is_dir()]
     elif sys.platform == "darwin":
         extras += _MAC_EXTRA_PATHS
     else:
@@ -71,7 +71,8 @@ def local_path_for(repo: RemoteRepo, settings: Settings) -> Path:
 def default_search_roots() -> list[Path]:
     """ダウンロード済みのリポジトリがありそうな場所（GitHub Desktop の場所など）。"""
     home = Path.home()
-    return [home / "Documents" / "GitHub", home / "GitHub", home / "source" / "repos",
+    return [home / "Documents" / "GitHub", home / "OneDrive" / "Documents" / "GitHub",
+            home / "OneDrive" / "ドキュメント" / "GitHub", home / "GitHub", home / "source" / "repos",
             home / "Desktop", home / "Documents", home / "Projects"]
 
 
@@ -89,9 +90,16 @@ def discover_existing(repos: list[RemoteRepo], settings: Settings, roots: list[P
         return found
     for root in roots:
         try:
-            children = [c for c in root.iterdir() if (c / ".git").exists()]
+            entries = list(root.iterdir())
         except OSError:
             continue
+        children = []
+        for c in entries:
+            try:  # 読めないフォルダが 1 つあっても、ほかは探し続ける
+                if (c / ".git").exists():
+                    children.append(c)
+            except OSError:
+                continue
         for child in children:
             for repo in wanted:
                 if repo.full_name in found or child.name.lower() != repo.name.lower():
@@ -128,6 +136,9 @@ def sync_all(settings: Settings, api, ctx: SyncContext,
     results: list[RepoResult] = []
     used_paths: set[Path] = set()
     repos = _collect(settings, api)
+    for full_name, p in list(settings.repo_paths.items()):
+        if not p.exists():  # 前に見つけたフォルダが消されていたら、記録も消して通常の場所を使う
+            del settings.repo_paths[full_name]
     roots = default_search_roots() if search_roots is None else search_roots
     settings.repo_paths.update(discover_existing(repos, settings, roots))
     for repo in repos:

@@ -66,8 +66,9 @@ def git_env() -> dict[str, str]:
 
 
 def popen_flags() -> dict:
-    if sys.platform == "win32":
-        return {"creationflags": subprocess.CREATE_NO_WINDOW}  # type: ignore[attr-defined]
+    flag = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # Windows で黒い画面を出さない
+    if sys.platform == "win32" and flag:
+        return {"creationflags": flag}
     return {}
 
 

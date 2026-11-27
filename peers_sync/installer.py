@@ -46,7 +46,18 @@ def _ok(run, args: list[str]) -> bool:
         return False
 
 
+def _helper_configured(run) -> bool:
+    try:
+        proc = run(["git", "config", "--get-all", "credential.helper"], capture_output=True, text=True,
+                   env=git_env(), **popen_flags())
+    except OSError:
+        return False
+    return proc.returncode == 0 and bool((proc.stdout or "").strip())
+
+
 def missing_tools(run=subprocess.run) -> list[str]:
+    from .engine import ensure_tool_path
+    ensure_tool_path()  # 入れた直後の道具も見つかるように、毎回 PATH を見直す
     if not _ok(run, ["git", "--version"]):
         return ["git", "git-lfs", "gcm"]
     missing = []
@@ -54,6 +65,11 @@ def missing_tools(run=subprocess.run) -> list[str]:
         missing.append("git-lfs")
     if not _ok(run, ["git", "credential-manager", "--version"]):
         missing.append("gcm")
+    elif not _helper_configured(run):
+        # 部品はあるのに、Git に登録されていない（Git より先に入れた場合など）。登録だけ自動で行う
+        _ok(run, ["git", "credential-manager", "configure"])
+        if not _helper_configured(run):
+            missing.append("gcm")
     return missing
 
 
@@ -77,11 +93,55 @@ def _arm() -> bool:
     return platform_mod.machine().lower() in ("arm64", "aarch64")
 
 
-def _install_windows(run) -> str:
+def _install_lfs_binary(download, os_name: str, exe_name: str) -> None:
+    arch = "arm64" if _arm() else "amd64"
+    _, url = _pick_asset(download, LFS_RELEASE, [os_name, arch, ".zip"])
+    with zipfile.ZipFile(io.BytesIO(download(url))) as z:
+        member = next(n for n in z.namelist() if n.rsplit("/", 1)[-1] == exe_name)
+        bin_dir = tool_bin_dir()
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        exe = bin_dir / exe_name
+        exe.write_bytes(z.read(member))
+    exe.chmod(exe.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _install_windows_parts(missing: list[str], run, download) -> str:
+    """Git はあるのに、LFS やログインの部品だけがないとき。winget では足せないので、個別に入れる。"""
+    notes = []
+    try:
+        if "git-lfs" in missing:
+            _install_lfs_binary(download, "windows", "git-lfs.exe")
+            notes.append("Git LFS を入れました。")
+        if "gcm" in missing:
+            name, url = _pick_asset(download, GCM_RELEASE, ["gcmuser-win", ".exe"])
+            bin_dir = tool_bin_dir()
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            exe = bin_dir / name
+            exe.write_bytes(download(url))
+            proc = run([str(exe), "/VERYSILENT", "/NORESTART"], capture_output=True, timeout=600,
+                       **popen_flags())
+            if proc.returncode != 0:
+                raise InstallError("ログインの部品を入れられませんでした。もう一度ボタンを押してください。")
+            notes.append("ログインの部品を入れました。")
+    except InstallError:
+        raise
+    except (OSError, ValueError, KeyError, StopIteration, zipfile.BadZipFile, subprocess.TimeoutExpired) as e:
+        raise InstallError("ダウンロードがうまくいきませんでした。インターネットの接続を確かめて、"
+                           f"もう一度ボタンを押してください。（{type(e).__name__}）") from e
+    return "\n".join(notes)
+
+
+def _install_windows(missing: list[str], run, download) -> str:
+    if "git" not in missing:
+        return _install_windows_parts(missing, run, download)
     cmd = ["winget", "install", "--id", "Git.Git", "-e", "--source", "winget", "--silent",
            "--accept-package-agreements", "--accept-source-agreements"]
     try:
-        proc = run(cmd, capture_output=True, text=True, **popen_flags())
+        # 出力は使わないので文字に直さない（日本語の Windows で文字化けして失敗あつかいにならないように）
+        proc = run(cmd, capture_output=True, timeout=1800, **popen_flags())
+    except subprocess.TimeoutExpired:
+        raise InstallError("Git のインストールが終わりませんでした。パソコンを再起動してから、"
+                           "もう一度ボタンを押してください。")
     except OSError:
         open_url(GIT_WIN_PAGE)
         raise InstallError("自動では入れられませんでした。Git のダウンロードページを開いたので、"
@@ -93,21 +153,16 @@ def _install_windows(run) -> str:
 
 
 def _install_mac(missing: list[str], run, download) -> str:
+    if "git" in missing:
+        # Git が入るまでは、ほかのものは入れない（ログインの部品の設定には Git が必要なため）
+        run(["xcode-select", "--install"], capture_output=True, text=True)
+        return ("Apple の画面が出たら「インストール」を押してください。"
+                "終わったら、もう一度このボタンを押してください（残りのものを入れます）。")
     notes = []
     bin_dir = tool_bin_dir()
     try:
-        if "git" in missing:
-            run(["xcode-select", "--install"], capture_output=True, text=True)
-            notes.append("Apple の画面が出たら「インストール」を押してください。")
         if "git-lfs" in missing:
-            arch = "arm64" if _arm() else "amd64"
-            _, url = _pick_asset(download, LFS_RELEASE, ["darwin", arch, ".zip"])
-            with zipfile.ZipFile(io.BytesIO(download(url))) as z:
-                member = next(n for n in z.namelist() if n.endswith("/git-lfs") or n == "git-lfs")
-                bin_dir.mkdir(parents=True, exist_ok=True)
-                exe = bin_dir / "git-lfs"
-                exe.write_bytes(z.read(member))
-            exe.chmod(exe.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            _install_lfs_binary(download, "darwin", "git-lfs")
             notes.append("Git LFS を入れました。")
         if "gcm" in missing:
             arch = "arm64" if _arm() else "x64"
@@ -134,7 +189,7 @@ def install_missing(missing: list[str], run=subprocess.run, download=None,
     if not missing:
         return "必要なものは、すべてそろっています。"
     if platform == "win32":
-        return _install_windows(run)
+        return _install_windows(missing, run, download)
     if platform == "darwin":
         return _install_mac(missing, run, download)
     raise InstallError("このパソコンでは自動で入れられません。ターミナルで "

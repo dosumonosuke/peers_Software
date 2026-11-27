@@ -1,10 +1,14 @@
 name: build
 
-# 手動（Actions タブの「Run workflow」）か、v で始まるタグを push したときに、配布用のアプリを作る
+# 手動（Actions タブの「Run workflow」）か、v で始まるタグを push したときに、配布用のアプリを作る。
+# タグのときは、GitHub の Releases ページにも置く（ログインしなくてもダウンロードできる）。
 on:
   workflow_dispatch:
   push:
     tags: ["v*"]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -13,11 +17,11 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: peers-Sync-windows
+            file: peers-Sync-windows.exe
           - os: macos-latest          # Apple シリコン（M1〜）の Mac
-            artifact: peers-Sync-mac-apple-silicon
+            file: peers-Sync-mac-apple-silicon.zip
           - os: macos-15-intel        # Intel の Mac
-            artifact: peers-Sync-mac-intel
+            file: peers-Sync-mac-intel.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -25,15 +29,45 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install . pyinstaller
-      - name: Build app
-        run: pyinstaller --noconfirm --windowed --name "peers Sync" --collect-data certifi run_peers_sync.py
-      - name: Zip (macOS)
-        if: runner.os == 'macOS'
-        run: ditto -c -k --keepParent "dist/peers Sync.app" "dist/peers-Sync.zip"
-      - name: Zip (Windows)
+
+      # Windows：ダブルクリックだけで開ける、ファイル 1 つの exe
+      - name: Build (Windows)
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path "dist/peers Sync/*" -DestinationPath "dist/peers-Sync.zip"
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name peers-Sync --collect-data certifi run_peers_sync.py
+          Move-Item dist/peers-Sync.exe "dist/${{ matrix.file }}"
+
+      # Mac：.app を zip にする（Safari は自動で展開してくれる）
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller --noconfirm --windowed --name "peers Sync" --collect-data certifi run_peers_sync.py
+          ditto -c -k --keepParent "dist/peers Sync.app" "dist/${{ matrix.file }}"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/peers-Sync.zip
+          name: ${{ matrix.file }}
+          path: dist/${{ matrix.file }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: peers Sync ${{ github.ref_name }}
+          body: |
+            ## ダウンロード
+            | パソコン | ファイル |
+            |---|---|
+            | Windows | **peers-Sync-windows.exe** |
+            | Mac（M1・M2・M3・M4 など） | **peers-Sync-mac-apple-silicon.zip** |
+            | Mac（Intel） | **peers-Sync-mac-intel.zip** |
+
+            はじめて開くとき：Windows は「詳細情報」→「実行」、Mac は右クリック →「開く」。
+          files: files/*

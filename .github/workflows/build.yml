@@ -1,0 +1,39 @@
+name: build
+
+# 手動（Actions タブの「Run workflow」）か、v で始まるタグを push したときに、配布用のアプリを作る
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: peers-Sync-windows
+          - os: macos-latest          # Apple シリコン（M1〜）の Mac
+            artifact: peers-Sync-mac-apple-silicon
+          - os: macos-15-intel        # Intel の Mac
+            artifact: peers-Sync-mac-intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install . pyinstaller
+      - name: Build app
+        run: pyinstaller --noconfirm --windowed --name "peers Sync" --collect-data certifi run_peers_sync.py
+      - name: Zip (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent "dist/peers Sync.app" "dist/peers-Sync.zip"
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path "dist/peers Sync/*" -DestinationPath "dist/peers-Sync.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/peers-Sync.zip

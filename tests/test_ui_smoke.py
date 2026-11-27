@@ -13,9 +13,9 @@ from peers_sync.gitrunner import CommandLog  # noqa: E402
 from peers_sync.models import RepoResult, Status  # noqa: E402
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def tk_ok():
-    try:
+    try:  # 画面が使えるかの確認は、ファイルごとに 1 回だけにする
         root = tk.Tk()
         root.destroy()
     except tk.TclError:

@@ -84,7 +84,9 @@ def test_mac_git_lfs_is_downloaded_into_app_bin(tmp_path, monkeypatch):
     assert urls == ["https://api.github.com/repos/git-lfs/git-lfs/releases/latest",
                     "https://dl/git-lfs-darwin-arm64-v3.6.0.zip"]
     exe = tmp_path / "git-lfs"
-    assert exe.exists() and os.stat(exe).st_mode & 0o111
+    assert exe.exists()
+    if os.name != "nt":  # Windows には「実行できる」印がない
+        assert os.stat(exe).st_mode & 0o111
 
 
 def test_mac_gcm_pkg_is_downloaded_and_opened(tmp_path, monkeypatch):

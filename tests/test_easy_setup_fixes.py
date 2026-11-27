@@ -62,6 +62,7 @@ def test_windows_only_gcm_missing_downloads_user_installer(tmp_path, monkeypatch
 
 def test_windows_only_lfs_missing_downloads_binary(tmp_path, monkeypatch):
     monkeypatch.setattr(installer, "tool_bin_dir", lambda: tmp_path)
+    monkeypatch.setattr(installer.platform_mod, "machine", lambda: "AMD64")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr("git-lfs-3.6.0/git-lfs.exe", "MZ")

@@ -105,7 +105,7 @@ def test_same_name_from_two_owners_get_different_folders(tmp_path, settings):
 def test_macos_gui_path_gets_homebrew_dirs(monkeypatch):
     import peers_sync.engine as engine
     monkeypatch.setattr(engine.sys, "platform", "darwin")
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", engine.os.pathsep.join(["/usr/bin", "/bin"]))
     engine.ensure_tool_path()
-    parts = engine.os.environ["PATH"].split(":")
+    parts = engine.os.environ["PATH"].split(engine.os.pathsep)
     assert "/opt/homebrew/bin" in parts and "/usr/local/bin" in parts

@@ -87,7 +87,7 @@ def _literal(paths: list[str]) -> str:
     return "\0".join(":(literal)" + p for p in paths)
 
 
-def _identity(git: GitRunner, ctx: SyncContext) -> dict[str, str]:
+def identity_config(git: GitRunner, ctx: SyncContext) -> dict[str, str]:
     email = git.run("config", "user.email", check=False).stdout.strip()
     if email:
         return {}
@@ -137,6 +137,6 @@ def commit_local_changes(git: GitRunner, repo: Path, ctx: SyncContext,
 
     when = ctx.now().strftime("%Y-%m-%d %H:%M")
     msg = f"[peers Sync] {ctx.machine_name} から同期 ({when}) — {len(staged)} 個のファイル"
-    committer = GitRunner(repo, log=git.log, extra_config={**git.extra_config, **_identity(git, ctx)})
+    committer = GitRunner(repo, log=git.log, extra_config={**git.extra_config, **identity_config(git, ctx)})
     committer.run("commit", "-q", "-m", msg)
     return len(staged), warnings

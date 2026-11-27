@@ -62,14 +62,31 @@ def classify(git: GitRunner, path: str) -> ConflictFile:
     return ConflictFile(path, "text", mine, theirs)
 
 
-def copy_name(path: str, label: str, exists: Callable[[str], bool]) -> str:
+def merge_in_progress(git: GitRunner) -> bool:
+    """合体の途中かどうか（.git がファイルの worktree などにも対応）。"""
+    p = git.run("rev-parse", "--git-path", "MERGE_HEAD", check=False).stdout.strip()
+    return bool(p) and (git.cwd / p).exists()
+
+
+_BAD_CHARS = '\\/:*?"<>|'
+
+
+def safe_label(label: str) -> str:
+    """パソコン名に、ファイル名に使えない記号があれば _ に変える。"""
+    out = "".join("_" if c in _BAD_CHARS else c for c in label).strip()
+    return out or "PC"
+
+
+def copy_name(path: str, label: str, exists: Callable[[str], bool],
+              template: str = "{label} の版") -> str:
+    tag = template.format(label=safe_label(label))
     directory, _, name = path.rpartition("/")
     dot = name.rfind(".")
     stem, ext = (name[:dot], name[dot:]) if dot > 0 else (name, "")
     prefix = f"{directory}/" if directory else ""
     n = 1
     while True:
-        suffix = f" ({label} の版)" if n == 1 else f" ({label} の版 {n})"
+        suffix = f" ({tag})" if n == 1 else f" ({tag} {n})"
         candidate = f"{prefix}{stem}{suffix}{ext}"
         if not exists(candidate):
             return candidate
@@ -96,6 +113,39 @@ def keep_both(git: GitRunner, repo: Path, path: str, machine: str, keep: Side) -
         to_add.append(".gitattributes")
     git.run("add", "--", *to_add)
     return copy
+
+
+_MARKERS = ("<<<<<<<", "=======", ">>>>>>>", "|||||||")
+
+
+def _normalize_markers(text: str) -> str:
+    return "\n".join(line[:7] if line.startswith(_MARKERS) else line for line in text.splitlines())
+
+
+def preserve_manual_edits(git: GitRunner, repo: Path) -> list[str]:
+    """合体の途中でユーザーが手で直したファイルを「(手で直した版)」のコピーとして残す。コピーのパスを返す。"""
+    repo = Path(repo)
+    saved = []
+    for path in conflicted_paths(git):
+        f = repo / path
+        if not f.is_file():
+            continue
+        current = f.read_bytes()
+        git.run("checkout", "-m", "--", path)  # Git が最初に書いた「競合の印つき」の状態を作り直す
+        regenerated = f.read_bytes()
+        f.write_bytes(current)  # ユーザーの版に戻す
+        if current == regenerated:
+            continue
+        try:
+            same = _normalize_markers(current.decode("utf-8")) == _normalize_markers(regenerated.decode("utf-8"))
+        except UnicodeDecodeError:
+            same = False
+        if same:
+            continue
+        copy = copy_name(path, "", lambda p: (repo / p).exists(), template="手で直した版")
+        (repo / copy).write_bytes(current)
+        saved.append(copy)
+    return saved
 
 
 def _resolve_deleted(git: GitRunner, path: str) -> None:
@@ -148,7 +198,9 @@ def start_resolution(repo: Path, ctx, lfs_available: bool = True) -> list[Confli
 
     repo = Path(repo)
     git = GitRunner(repo, log=ctx.log)
-    if not (repo / ".git" / "MERGE_HEAD").exists():
+    if merge_in_progress(git):
+        preserve_manual_edits(git, repo)
+    else:
         commit_local_changes(git, repo, ctx, lfs_available)
         branch = current_branch(git)
         if branch is None:
@@ -182,7 +234,7 @@ def finish_resolution(repo: Path, choices: dict[str, Side], ctx,
     if missing:
         raise ValueError(f"まだ選んでいないファイルがあります: {', '.join(missing)}")
     try:
-        if (repo / ".git" / "MERGE_HEAD").exists():
+        if merge_in_progress(git):
             result.pulled_commits = int(git.run("rev-list", "--count", "HEAD..MERGE_HEAD").stdout.strip() or 0)
             for path in pending:
                 keep_both(git, repo, path, ctx.machine_name, keep=choices[path])
@@ -201,5 +253,7 @@ def finish_resolution(repo: Path, choices: dict[str, Side], ctx,
 
 def cancel_resolution(repo: Path) -> None:
     repo = Path(repo)
-    if (repo / ".git" / "MERGE_HEAD").exists():
-        GitRunner(repo).run("merge", "--abort")
+    git = GitRunner(repo)
+    if merge_in_progress(git):
+        preserve_manual_edits(git, repo)
+        git.run("merge", "--abort")

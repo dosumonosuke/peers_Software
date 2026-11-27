@@ -56,6 +56,9 @@ class GitError(Exception):
         self.stderr = stderr
 
 
+SAFE_DEFAULTS = {"merge.ff": "true", "commit.gpgsign": "false"}
+
+
 def git_env() -> dict[str, str]:
     env = dict(os.environ)
     env["GIT_TERMINAL_PROMPT"] = "0"
@@ -73,7 +76,8 @@ class GitRunner:
                  extra_config: dict[str, str] | None = None):
         self.cwd = Path(cwd)
         self.log = log if log is not None else []
-        self.extra_config = dict(extra_config or {})
+        # ユーザーの設定（merge.ff=only・コミットの署名など）で同期が止まらないように、毎回上書きする
+        self.extra_config = {**SAFE_DEFAULTS, **(extra_config or {})}
 
     def _cmd(self, args: tuple[str, ...]) -> list[str]:
         cmd = ["git"]

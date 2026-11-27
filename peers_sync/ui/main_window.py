@@ -15,7 +15,7 @@ from typing import Callable
 from ..config import Settings, save_settings
 from ..credentials import LoginError
 from ..engine import SyncAbort
-from ..messages import status_text
+from ..messages import LFS_MISSING, status_text
 from ..models import RepoResult, Status, SyncContext
 
 SYNC_LABEL = "🔄  ぜんぶ同期"
@@ -114,7 +114,7 @@ class MainWindow(tk.Tk):
             self.main_button.config(state="disabled")
             return
         if not self.lfs_available:
-            self._message.set("Git LFS が見つかりません。動画などの大きいファイルは送れません。")
+            self._message.set(LFS_MISSING)
         stored = self.services.get_token()
         self._set_token(stored[1] if stored else None)
 

@@ -36,6 +36,20 @@ def is_secret_path(path: str) -> bool:
     return any(fnmatch(name, pat) for pat in _SECRET_PATTERNS)
 
 
+def is_secret_file(path: str, abs_path) -> bool:
+    """中身も見て判定する。Keynote のファイル（.key）は zip なので、鍵ファイルではない。"""
+    if not is_secret_path(path):
+        return False
+    if _basename(path).endswith(".key"):
+        try:
+            with open(abs_path, "rb") as f:
+                if f.read(4) == b"PK\x03\x04":
+                    return False
+        except OSError:
+            pass
+    return True
+
+
 def needs_lfs(path: str, size: int) -> bool:
     return _ext(path) in VIDEO_EXTENSIONS or size > LFS_SIZE_THRESHOLD
 

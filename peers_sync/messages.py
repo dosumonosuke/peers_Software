@@ -23,11 +23,17 @@ def status_text(r: RepoResult) -> str:
     return f"❌ エラー: {r.error or '原因がわかりませんでした'}"
 
 
+LFS_MISSING = ("Git LFS が見つかりません。動画などの大きいファイルは送れません。"
+               "https://git-lfs.com からインストールして、このアプリを開き直してください。")
+
 # (stderr に含まれる言葉, 日本語の説明)。上から順に探す。
 _RULES = [
     (("authentication failed", "could not read username", "invalid username or password",
-      "permission denied", "403"),
+      "permission denied (publickey)", "returned error: 403", "returned error: 401"),
      "GitHub のログインが切れているか、権限がありません。設定から、もう一度ログインしてください。"),
+    (("unable to unlink", "unable to create", "permission denied", "device or resource busy",
+      "could not open", "cannot open"),
+     "ファイルがほかのアプリで開かれているか、書きこめません。そのアプリを閉じてから、もう一度同期してください。"),
     (("could not resolve host", "unable to access", "connection timed out", "failed to connect",
       "network is unreachable"),
      "GitHub につながりません。インターネットの接続を確かめてから、もう一度同期してください。"),

@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .changes import commit_local_changes, identity_config
-from .conflicts import auto_resolve
+from .conflicts import auto_resolve, merge_in_progress
 from .gitrunner import GitError, GitRunner
 from .messages import explain_error
 from .models import RepoResult, Status, SyncContext
@@ -84,9 +84,13 @@ def merge_remote(git: GitRunner, repo: Path, branch: str, ctx: SyncContext,
     proc = merger.run("merge", "--no-edit", *unrelated_flag(git, branch), f"origin/{branch}", check=False)
     if proc.returncode == 0:
         return True
-    if not (repo / ".git" / "MERGE_HEAD").exists():
+    if not merge_in_progress(git):
         raise GitError(["merge", f"origin/{branch}"], proc.returncode, proc.stderr or proc.stdout)
-    remaining = auto_resolve(git, repo, ctx.machine_name, notes)
+    try:
+        remaining = auto_resolve(git, repo, ctx.machine_name, notes)
+    except Exception:
+        git.run("merge", "--abort", check=False)  # 中途半端な合体を残さない
+        raise
     if remaining:
         git.run("merge", "--abort")
         return False
@@ -118,7 +122,7 @@ def sync_repo(path: Path, clone_url: str, full_name: str, ctx: SyncContext,
             result.error = (f"「{path}」は別のリポジトリ{where}につながっています。中身は変えていません。"
                             "設定で、このリポジトリの置き場所を変えてください。")
             return result
-        if (path / ".git" / "MERGE_HEAD").exists():
+        if merge_in_progress(git):
             result.status = Status.CONFLICT
             return result
         if _in_progress_operation(git):
@@ -160,4 +164,8 @@ def sync_repo(path: Path, clone_url: str, full_name: str, ctx: SyncContext,
     except GitError as e:
         result.status = Status.ERROR
         result.error = _explain(e.stderr)
+        return result
+    except OSError as e:
+        result.status = Status.ERROR
+        result.error = f"ファイルの読み書きができませんでした（{e.strerror or e}）。空き容量や、ほかのアプリで開いていないかを確かめてください。"
         return result

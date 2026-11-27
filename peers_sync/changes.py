@@ -63,7 +63,7 @@ def scan_changes(git: GitRunner, repo: Path, lfs_available: bool) -> LocalChange
         if path.endswith("/"):
             skip_reason = (f"「{path.rstrip('/')}」の中に、別のリポジトリが入っています。"
                            "中身は同期できないので、送りませんでした。")
-        elif safety.is_secret_path(path):
+        elif safety.is_secret_file(path, repo / path):
             skip_reason = f"「{path}」はパスワードや鍵のファイルのようなので、送りませんでした。"
         elif safety.is_too_large(size):
             skip_reason = f"「{path}」は 2GB を超えているので、GitHub に送れません。"

@@ -208,3 +208,39 @@ def test_settings_dialog_loads_repo_list_without_touching_tk_from_thread(tk_ok, 
         time.sleep(0.02)
     assert "me/a" in d.repo_vars
     w.destroy()
+
+
+def test_conflict_dialog_runs_git_off_ui_thread_and_passes_lfs_flag(tk_ok, settings, tmp_path):
+    import threading as th
+    from peers_sync.conflicts import ConflictFile
+    from peers_sync.models import SyncContext
+    from peers_sync.ui.conflict_dialog import ConflictDialog
+
+    seen = {}
+    done = []
+
+    def start(path, ctx, lfs_available):
+        seen["start_main"] = th.current_thread() is th.main_thread()
+        seen["lfs"] = lfs_available
+        return [ConflictFile("README.md", "text", "B", "A")]
+
+    def finish(path, choices, ctx, full_name=None):
+        seen["finish_main"] = th.current_thread() is th.main_thread()
+        seen["choices"] = choices
+        return res(full_name, Status.PUSHED_AND_PULLED)
+
+    w = make_window(settings, tmp_path)
+    ctx = SyncContext("PC", "me", confirm=lambda q: True)
+    d = ConflictDialog(w, res("me/r", Status.CONFLICT), ctx,
+                       on_done=lambda r: done.append((r.status, th.current_thread() is th.main_thread())),
+                       lfs_available=False, start=start, finish=finish, cancel=lambda p: None)
+    end = time.time() + 5
+    while not d.choices and time.time() < end:
+        w.update(); time.sleep(0.02)
+    assert seen == {"start_main": False, "lfs": False}
+    d.on_decide()
+    while not done and time.time() < end:
+        w.update(); time.sleep(0.02)
+    assert seen["finish_main"] is False and seen["choices"] == {"README.md": "mine"}
+    assert done == [(Status.PUSHED_AND_PULLED, True)]
+    w.destroy()

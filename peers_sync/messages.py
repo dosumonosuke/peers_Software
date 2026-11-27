@@ -39,6 +39,9 @@ _RULES = [
      "同期している間に、ほかのパソコンから GitHub が更新されました。もう一度「ぜんぶ同期」を押してください。"),
     (("repository not found", "does not appear to be a git repository"),
      "GitHub にこのリポジトリが見つかりません。名前が変わったか、消された可能性があります。"),
+    (("would be overwritten by merge", "untracked working tree files would be overwritten"),
+     "送らなかったファイル（パスワードっぽいファイルなど）と、GitHub 側の変更がぶつかっています。"
+     "そのファイルを別の場所に移してから、もう一度同期してください。"),
     (("no space left on device",),
      "パソコンの空き容量が足りません。いらないファイルを消してから、もう一度同期してください。"),
 ]

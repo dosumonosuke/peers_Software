@@ -108,7 +108,19 @@ def _resolve_deleted(git: GitRunner, path: str) -> None:
     git.run("add", "--", path)
 
 
-def auto_resolve(git: GitRunner, repo: Path, machine: str) -> list[ConflictFile]:
+def _merge_gitattributes(git: GitRunner, repo: Path, cf: ConflictFile) -> None:
+    """.gitattributes は「両方の行を全部残す」で合体する（LFS のルールを消さないため）。"""
+    lines: list[str] = []
+    for text in (cf.mine or "", cf.theirs or ""):
+        for line in text.splitlines():
+            if line not in lines:
+                lines.append(line)
+    (Path(repo) / cf.path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    git.run("add", "--", cf.path)
+
+
+def auto_resolve(git: GitRunner, repo: Path, machine: str,
+                 notes: list[str] | None = None) -> list[ConflictFile]:
     """画像・動画などと、消された/変えられたファイルの競合を自動で解決する。残ったテキストの競合を返す。"""
     remaining = []
     for path in conflicted_paths(git):
@@ -116,7 +128,12 @@ def auto_resolve(git: GitRunner, repo: Path, machine: str) -> list[ConflictFile]
         if cf.kind == "deleted":
             _resolve_deleted(git, path)
         elif cf.kind == "binary":
-            keep_both(git, repo, path, machine, keep="theirs")
+            copy = keep_both(git, repo, path, machine, keep="theirs")
+            if notes is not None:
+                notes.append(f"「{path}」はほかのパソコンでも変えられていました。GitHub の版を元の名前で、"
+                             f"このパソコンの版を「{copy}」として、両方残しました。")
+        elif path.rsplit("/", 1)[-1] == ".gitattributes":
+            _merge_gitattributes(git, repo, cf)
         else:
             remaining.append(cf)
     return remaining
@@ -127,7 +144,7 @@ def auto_resolve(git: GitRunner, repo: Path, machine: str) -> list[ConflictFile]
 def start_resolution(repo: Path, ctx, lfs_available: bool = True) -> list[ConflictFile]:
     """合体をやり直す。画像などは自動で解決し、ユーザーに選んでほしいテキストの競合だけを返す。"""
     from .changes import commit_local_changes, identity_config
-    from .sync import ahead_behind, current_branch
+    from .sync import ahead_behind, current_branch, unrelated_flag
 
     repo = Path(repo)
     git = GitRunner(repo, log=ctx.log)
@@ -141,7 +158,7 @@ def start_resolution(repo: Path, ctx, lfs_available: bool = True) -> list[Confli
         if not counts or counts[1] == 0:
             return []
         merger = GitRunner(repo, log=git.log, extra_config=identity_config(git, ctx))
-        if merger.run("merge", "--no-edit", f"origin/{branch}", check=False).returncode == 0:
+        if merger.run("merge", "--no-edit", *unrelated_flag(git, branch), f"origin/{branch}", check=False).returncode == 0:
             return []
     remaining = auto_resolve(git, repo, ctx.machine_name)
     if not remaining:

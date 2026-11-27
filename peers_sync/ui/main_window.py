@@ -285,7 +285,7 @@ class MainWindow(tk.Tk):
             from .conflict_dialog import ConflictDialog
             ctx = SyncContext(self.settings.machine_name, self.settings.github_login,
                               confirm=self.ask_yes_no, log=self.log)
-            ConflictDialog(self, r, ctx, on_done=self.show_result)
+            ConflictDialog(self, r, ctx, on_done=self.show_result, lfs_available=self.lfs_available)
 
     def open_settings(self) -> None:
         from .settings_dialog import SettingsDialog

@@ -60,7 +60,10 @@ def scan_changes(git: GitRunner, repo: Path, lfs_available: bool) -> LocalChange
         is_new = xy == "??" or xy[0] == "A"
         size = _size(repo, path)
         skip_reason = None
-        if safety.is_secret_path(path):
+        if path.endswith("/"):
+            skip_reason = (f"「{path.rstrip('/')}」の中に、別のリポジトリが入っています。"
+                           "中身は同期できないので、送りませんでした。")
+        elif safety.is_secret_path(path):
             skip_reason = f"「{path}」はパスワードや鍵のファイルのようなので、送りませんでした。"
         elif safety.is_too_large(size):
             skip_reason = f"「{path}」は 2GB を超えているので、GitHub に送れません。"
@@ -119,7 +122,11 @@ def commit_local_changes(git: GitRunner, repo: Path, ctx: SyncContext,
             lfs_new = []
 
     for path in ch.unstage:
-        git.run("rm", "--cached", "-q", "--", ":(literal)" + path, check=False)
+        in_head = git.run("cat-file", "-e", f"HEAD:{path}", check=False).returncode == 0
+        if in_head:  # すでに GitHub にあるファイルは、消さずに「選ぶのをやめる」だけ
+            git.run("restore", "--staged", "--", ":(literal)" + path, check=False)
+        else:
+            git.run("rm", "--cached", "-q", "--", ":(literal)" + path, check=False)
 
     to_stage = ch.to_stage + deleted
     for path in lfs_new:

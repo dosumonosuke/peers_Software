@@ -1,6 +1,7 @@
 """設定画面：ログイン、置き場所、同期しないリポジトリ、このパソコンの名前など。"""
 from __future__ import annotations
 
+import queue
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -41,7 +42,10 @@ class SettingsDialog(tk.Toplevel):
         self.repo_frame.pack(fill="x")
         self.repo_vars: dict[str, tk.BooleanVar] = {}
         ttk.Label(self.repo_frame, text="一覧を読み込んでいます…").pack(anchor="w")
+        # 一覧の取得は裏で行い、画面への反映は画面のスレッドで行う（Mac で落ちないように）
+        self._loaded: queue.Queue = queue.Queue()
         threading.Thread(target=self._load_repos, daemon=True).start()
+        self.after(100, self._check_loaded)
 
         # 追加のリポジトリ・場所の登録
         ttk.Label(frm, text="自分以外のリポジトリ（1 行に 1 つ、例：owner/name）").pack(anchor="w", pady=(12, 0))
@@ -65,11 +69,18 @@ class SettingsDialog(tk.Toplevel):
                 names = [r.full_name for r in self.app.services.make_api(self.app.token).list_owned_repos()]
             except Exception:
                 names = []
-        names = sorted(set(names) | set(self.app.settings.excluded))
+        self._loaded.put(sorted(set(names) | set(self.app.settings.excluded)))
+
+    def _check_loaded(self) -> None:
         try:
-            self.after(0, lambda: self._show_repos(names))
-        except (tk.TclError, RuntimeError):
-            pass
+            names = self._loaded.get_nowait()
+        except queue.Empty:
+            try:
+                self.after(100, self._check_loaded)
+            except tk.TclError:
+                pass
+            return
+        self._show_repos(names)
 
     def _show_repos(self, names: list[str]) -> None:
         for child in self.repo_frame.winfo_children():

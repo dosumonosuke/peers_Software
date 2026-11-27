@@ -1,6 +1,7 @@
 """メインの画面：大きな「ぜんぶ同期」ボタンと、リポジトリごとの結果。"""
 from __future__ import annotations
 
+import gc
 import queue
 import sys
 import threading
@@ -148,6 +149,9 @@ class MainWindow(tk.Tk):
             return
         self.busy = True
         self.main_button.config(state="disabled")
+        # 裏の処理の最中に Python の後片付け（GC）が走ると、画面の部品がそのスレッドで壊されて
+        # Mac でアプリが落ちることがある。裏の処理が終わるまで止めて、終わったら画面側で片付ける。
+        gc.disable()
         if not self.token:
             self._message.set("ブラウザで GitHub にログインしてください…")
             threading.Thread(target=self._login_worker, daemon=True).start()
@@ -230,6 +234,8 @@ class MainWindow(tk.Tk):
             elif kind == "finished":
                 self._finish_sync()
             elif kind == "done":
+                gc.enable()
+                gc.collect()
                 self.busy = False
                 self.main_button.config(state="normal")
                 self._render_log()

@@ -166,3 +166,45 @@ def test_detail_log_lists_git_commands(tk_ok, settings, tmp_path):
     pump_until_idle(w)
     assert "$ git push origin main  — セーブしたものを GitHub に送る" in w.log_text()
     w.destroy()
+
+
+def test_gc_runs_only_on_ui_thread_while_worker_runs(tk_ok, settings, tmp_path):
+    """裏の処理の最中に Python の後片付け（GC）が走ると、Mac で画面の部品が壊れて落ちる。"""
+    import gc
+    seen = []
+
+    def fake_sync_all(*a, **k):
+        seen.append(gc.isenabled())
+        return []
+
+    w = make_window(settings, tmp_path, sync_all=fake_sync_all)
+    w.on_sync_clicked()
+    pump_until_idle(w)
+    assert seen == [False] and gc.isenabled()
+    w.destroy()
+
+
+def test_settings_dialog_loads_repo_list_without_touching_tk_from_thread(tk_ok, settings, tmp_path, monkeypatch):
+    from peers_sync.models import RemoteRepo
+    from peers_sync.ui.settings_dialog import SettingsDialog
+
+    class Api(FakeApi):
+        def list_owned_repos(self):
+            return [RemoteRepo("me/a", "a", "u", False, False)]
+
+    w = make_window(settings, tmp_path, make_api=lambda t: Api())
+    d = SettingsDialog(w)
+    orig_after = d.after
+    import threading as th
+
+    def guarded_after(*a, **k):
+        assert th.current_thread() is th.main_thread(), "Tk を裏のスレッドから触った"
+        return orig_after(*a, **k)
+
+    monkeypatch.setattr(d, "after", guarded_after)
+    end = time.time() + 5
+    while "me/a" not in d.repo_vars and time.time() < end:
+        w.update()
+        time.sleep(0.02)
+    assert "me/a" in d.repo_vars
+    w.destroy()

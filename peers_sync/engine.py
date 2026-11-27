@@ -11,7 +11,8 @@ from .config import Settings
 from .gitrunner import git_env, popen_flags
 from .github_api import GitHubError
 from .models import RemoteRepo, RepoResult, Status, SyncContext
-from .sync import sync_repo
+from .gitrunner import GitRunner
+from .sync import same_remote, sync_repo
 
 # Mac で Finder から起動したアプリは、Homebrew の場所を知らないので足してあげる
 _MAC_EXTRA_PATHS = ["/opt/homebrew/bin", "/usr/local/bin"]
@@ -67,6 +68,39 @@ def local_path_for(repo: RemoteRepo, settings: Settings) -> Path:
     return settings.repo_paths.get(repo.full_name) or settings.base_dir / repo.name
 
 
+def default_search_roots() -> list[Path]:
+    """ダウンロード済みのリポジトリがありそうな場所（GitHub Desktop の場所など）。"""
+    home = Path.home()
+    return [home / "Documents" / "GitHub", home / "GitHub", home / "source" / "repos",
+            home / "Desktop", home / "Documents", home / "Projects"]
+
+
+def _origin(path: Path) -> str:
+    proc = GitRunner(path).run("remote", "get-url", "origin", check=False)
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def discover_existing(repos: list[RemoteRepo], settings: Settings, roots: list[Path]) -> dict[str, Path]:
+    """置き場所にまだないリポジトリを、よくある場所の 1 段下から探す。origin が同じものだけ使う。"""
+    found: dict[str, Path] = {}
+    wanted = [r for r in repos if r.full_name not in settings.repo_paths
+              and not local_path_for(r, settings).exists()]
+    if not wanted:
+        return found
+    for root in roots:
+        try:
+            children = [c for c in root.iterdir() if (c / ".git").exists()]
+        except OSError:
+            continue
+        for child in children:
+            for repo in wanted:
+                if repo.full_name in found or child.name.lower() != repo.name.lower():
+                    continue
+                if same_remote(_origin(child), repo.clone_url):
+                    found[repo.full_name] = child
+    return found
+
+
 def _api_message(e: GitHubError) -> str:
     if e.status in (401, 403):
         return "GitHub のログインが切れています。設定から、もう一度ログインしてください。"
@@ -89,10 +123,14 @@ def _collect(settings: Settings, api) -> list[RemoteRepo]:
 
 
 def sync_all(settings: Settings, api, ctx: SyncContext,
-             on_result: Callable[[RepoResult], None], lfs_available: bool) -> list[RepoResult]:
+             on_result: Callable[[RepoResult], None], lfs_available: bool,
+             search_roots: list[Path] | None = None) -> list[RepoResult]:
     results: list[RepoResult] = []
     used_paths: set[Path] = set()
-    for repo in _collect(settings, api):
+    repos = _collect(settings, api)
+    roots = default_search_roots() if search_roots is None else search_roots
+    settings.repo_paths.update(discover_existing(repos, settings, roots))
+    for repo in repos:
         path = local_path_for(repo, settings)
         if path in used_paths:  # 別の持ち主の、同じ名前のリポジトリ
             owner = repo.full_name.split("/")[0]

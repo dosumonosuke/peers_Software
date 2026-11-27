@@ -1,0 +1,101 @@
+"""全リポジトリを順番に同期する係。1 つ失敗しても、ほかは止めない。"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Callable
+
+from .config import Settings
+from .gitrunner import git_env, popen_flags
+from .github_api import GitHubError
+from .models import RemoteRepo, RepoResult, Status, SyncContext
+from .sync import sync_repo
+
+# Mac で Finder から起動したアプリは、Homebrew の場所を知らないので足してあげる
+_MAC_EXTRA_PATHS = ["/opt/homebrew/bin", "/usr/local/bin"]
+
+
+class SyncAbort(Exception):
+    """同期を始められないときのエラー（日本語のメッセージを持つ）。"""
+
+
+def ensure_tool_path() -> None:
+    if sys.platform != "darwin":
+        return
+    parts = os.environ.get("PATH", "").split(":")
+    for extra in _MAC_EXTRA_PATHS:
+        if extra not in parts:
+            parts.append(extra)
+    os.environ["PATH"] = ":".join(p for p in parts if p)
+
+
+def _run(*args: str) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(list(args), capture_output=True, text=True, env=git_env(), **popen_flags())
+    except OSError:
+        return None
+
+
+def check_prerequisites() -> tuple[str | None, bool]:
+    """(Git がないときの日本語メッセージ, Git LFS が使えるか) を返す。"""
+    ensure_tool_path()
+    git = _run("git", "--version")
+    if git is None or git.returncode != 0:
+        return ("Git が見つかりません。https://git-scm.com/downloads から Git をインストールして、"
+                "このアプリを開き直してください。"), False
+    lfs = _run("git", "lfs", "version")
+    if lfs is None or lfs.returncode != 0:
+        return None, False
+    _run("git", "lfs", "install", "--skip-repo")
+    return None, True
+
+
+def local_path_for(repo: RemoteRepo, settings: Settings) -> Path:
+    return settings.repo_paths.get(repo.full_name) or settings.base_dir / repo.name
+
+
+def _api_message(e: GitHubError) -> str:
+    if e.status in (401, 403):
+        return "GitHub のログインが切れています。設定から、もう一度ログインしてください。"
+    if e.status == 0:
+        return "GitHub につながりません。インターネットの接続を確かめてください。"
+    return f"GitHub からリポジトリの一覧を取れませんでした（エラー {e.status}）。少し待ってから、もう一度お試しください。"
+
+
+def _collect(settings: Settings, api) -> list[RemoteRepo]:
+    try:
+        repos = list(api.list_owned_repos())
+        known = {r.full_name for r in repos}
+        for full_name in settings.extra_repos:
+            if full_name not in known:
+                repos.append(api.get_repo(full_name))
+                known.add(full_name)
+    except GitHubError as e:
+        raise SyncAbort(_api_message(e)) from e
+    return repos
+
+
+def sync_all(settings: Settings, api, ctx: SyncContext,
+             on_result: Callable[[RepoResult], None], lfs_available: bool) -> list[RepoResult]:
+    results: list[RepoResult] = []
+    used_paths: set[Path] = set()
+    for repo in _collect(settings, api):
+        path = local_path_for(repo, settings)
+        if path in used_paths:  # 別の持ち主の、同じ名前のリポジトリ
+            owner = repo.full_name.split("/")[0]
+            path = settings.base_dir / f"{owner}-{repo.name}"
+        used_paths.add(path)
+
+        if repo.full_name in settings.excluded:
+            result = RepoResult(repo.full_name, path, Status.SKIPPED)
+        else:
+            try:
+                result = sync_repo(path, repo.clone_url, repo.full_name, ctx, lfs_available)
+            except Exception as e:  # 想定外のエラーでも、ほかのリポジトリは続ける
+                result = RepoResult(repo.full_name, path, Status.ERROR,
+                                    error=f"想定外のエラーが起きました（{type(e).__name__}）。くわしいログを見てください。")
+        results.append(result)
+        on_result(result)
+    return results

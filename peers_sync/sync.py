@@ -6,14 +6,11 @@ from pathlib import Path
 from .changes import commit_local_changes, identity_config
 from .conflicts import auto_resolve
 from .gitrunner import GitError, GitRunner
+from .messages import explain_error
 from .models import RepoResult, Status, SyncContext
 
 
 def _explain(stderr: str) -> str:
-    try:
-        from .messages import explain_error
-    except ImportError:  # Task 8 までの仮の説明
-        return (stderr.strip().splitlines() or ["Git でエラーが起きました"])[0]
     return explain_error(stderr)
 
 

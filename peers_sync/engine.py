@@ -22,13 +22,24 @@ class SyncAbort(Exception):
 
 
 def ensure_tool_path() -> None:
-    if sys.platform != "darwin":
+    """Finder から開いたアプリや、Git を入れた直後のアプリでも道具が見つかるように、PATH に場所を足す。"""
+    from .installer import tool_bin_dir
+    extras: list[str] = []
+    if sys.platform == "win32":
+        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        git_cmd = Path(program_files) / "Git" / "cmd"
+        if git_cmd.is_dir():
+            extras.append(str(git_cmd))
+    elif sys.platform == "darwin":
+        extras += _MAC_EXTRA_PATHS
+    else:
         return
-    parts = os.environ.get("PATH", "").split(":")
-    for extra in _MAC_EXTRA_PATHS:
+    extras.append(str(tool_bin_dir()))
+    parts = os.environ.get("PATH", "").split(os.pathsep)
+    for extra in extras:
         if extra not in parts:
             parts.append(extra)
-    os.environ["PATH"] = ":".join(p for p in parts if p)
+    os.environ["PATH"] = os.pathsep.join(p for p in parts if p)
 
 
 def _run(*args: str) -> subprocess.CompletedProcess | None:

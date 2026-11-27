@@ -308,3 +308,56 @@ def test_discovered_paths_are_saved_after_sync(tk_ok, settings, tmp_path):
     pump_until_idle(w)
     assert load_settings(tmp_path / "s.json").repo_paths == {"me/x": tmp_path / "found"}
     w.destroy()
+
+
+def test_gc_guard_nests():
+    import gc
+    from peers_sync.ui import gcguard
+    gcguard.pause()
+    gcguard.pause()
+    gcguard.resume()
+    assert not gc.isenabled()
+    gcguard.resume()
+    assert gc.isenabled()
+
+
+def test_settings_loader_runs_with_gc_paused(tk_ok, settings, tmp_path):
+    import gc
+    from peers_sync.ui.settings_dialog import SettingsDialog
+    seen = []
+
+    class Api(FakeApi):
+        def list_owned_repos(self):
+            seen.append(gc.isenabled())
+            return []
+
+    w = make_window(settings, tmp_path, make_api=lambda t: Api())
+    d = SettingsDialog(w)
+    end = time.time() + 5
+    while not seen and time.time() < end:
+        w.update(); time.sleep(0.02)
+    for _ in range(20):
+        w.update(); time.sleep(0.02)
+    assert seen == [False] and gc.isenabled()
+    w.destroy()
+
+
+def test_closing_settings_before_list_arrives_restores_gc(tk_ok, settings, tmp_path):
+    import gc
+    import threading as th
+    from peers_sync.ui.settings_dialog import SettingsDialog
+    release = th.Event()
+
+    class Api(FakeApi):
+        def list_owned_repos(self):
+            release.wait(5)
+            return []
+
+    w = make_window(settings, tmp_path, make_api=lambda t: Api())
+    d = SettingsDialog(w)
+    d.destroy()
+    release.set()
+    for _ in range(20):
+        w.update(); time.sleep(0.02)
+    assert gc.isenabled()
+    w.destroy()

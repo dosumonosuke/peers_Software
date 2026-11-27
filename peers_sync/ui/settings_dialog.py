@@ -7,6 +7,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from . import gcguard
+
 
 class SettingsDialog(tk.Toplevel):
     def __init__(self, master):
@@ -44,6 +46,8 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(self.repo_frame, text="一覧を読み込んでいます…").pack(anchor="w")
         # 一覧の取得は裏で行い、画面への反映は画面のスレッドで行う（Mac で落ちないように）
         self._loaded: queue.Queue = queue.Queue()
+        self._gc_paused = True
+        gcguard.pause()  # 一覧を読み込むあいだは後片付けを止める（Mac で落ちないように）
         threading.Thread(target=self._load_repos, daemon=True).start()
         self.after(100, self._check_loaded)
 
@@ -71,6 +75,16 @@ class SettingsDialog(tk.Toplevel):
                 names = []
         self._loaded.put(sorted(set(names) | set(self.app.settings.excluded)))
 
+    def _resume_gc(self) -> None:
+        if getattr(self, "_gc_paused", False):
+            self._gc_paused = False
+            gcguard.resume()
+
+    def destroy(self) -> None:
+        # 一覧が届く前に閉じても、止めた後片付けを必ず元に戻す
+        self._resume_gc()
+        super().destroy()
+
     def _check_loaded(self) -> None:
         try:
             names = self._loaded.get_nowait()
@@ -80,6 +94,7 @@ class SettingsDialog(tk.Toplevel):
             except tk.TclError:
                 pass
             return
+        self._resume_gc()
         self._show_repos(names)
 
     def _show_repos(self, names: list[str]) -> None:

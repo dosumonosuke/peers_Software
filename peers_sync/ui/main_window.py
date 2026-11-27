@@ -1,7 +1,6 @@
 """メインの画面：大きな「ぜんぶ同期」ボタンと、リポジトリごとの結果。"""
 from __future__ import annotations
 
-import gc
 import queue
 import sys
 import threading
@@ -18,6 +17,7 @@ from ..engine import SyncAbort
 from ..installer import InstallError, describe
 from ..messages import LFS_MISSING, status_text
 from ..models import RepoResult, Status, SyncContext
+from . import gcguard
 
 SYNC_LABEL = "🔄  ぜんぶ同期"
 LOGIN_LABEL = "🔑  GitHub でログイン"
@@ -163,14 +163,14 @@ class MainWindow(tk.Tk):
             return
         self.busy = True
         self.main_button.config(state="disabled")
+        # 裏の処理の最中は後片付け（GC）を止める（くわしくは gcguard.py）
+        gcguard.pause()
         if self.missing:
-            gc.disable()
             self._message.set("必要なものを入れています…（数分かかることがあります）")
             threading.Thread(target=self._install_worker, args=(list(self.missing),), daemon=True).start()
             return
         # 裏の処理の最中に Python の後片付け（GC）が走ると、画面の部品がそのスレッドで壊されて
         # Mac でアプリが落ちることがある。裏の処理が終わるまで止めて、終わったら画面側で片付ける。
-        gc.disable()
         if not self.token:
             self._message.set("ブラウザで GitHub にログインしてください…")
             threading.Thread(target=self._login_worker, daemon=True).start()
@@ -268,8 +268,7 @@ class MainWindow(tk.Tk):
                 self._finish_sync()
                 self._save()  # 自動で見つけたリポジトリの場所などを覚えておく
             elif kind == "done":
-                gc.enable()
-                gc.collect()
+                gcguard.resume()
                 self.busy = False
                 self.main_button.config(state="normal")
                 self._render_log()

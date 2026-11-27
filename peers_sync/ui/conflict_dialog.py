@@ -4,7 +4,6 @@ Git の操作（フェッチ・合体・送信）は時間がかかるので裏�
 """
 from __future__ import annotations
 
-import gc
 import queue
 import threading
 import tkinter as tk
@@ -13,6 +12,7 @@ from typing import Callable
 
 from ..conflicts import cancel_resolution, finish_resolution, start_resolution
 from ..models import RepoResult, SyncContext
+from . import gcguard
 
 
 class ConflictDialog(tk.Toplevel):
@@ -41,7 +41,7 @@ class ConflictDialog(tk.Toplevel):
     # ---------- 裏で動かす ----------
     def _run(self, job: Callable[[], tuple]) -> None:
         self.busy = True
-        gc.disable()  # 裏の処理中に画面の部品が別スレッドで片付けられると、Mac で落ちるため
+        gcguard.pause()  # 裏の処理中に画面の部品が別スレッドで片付けられると、Mac で落ちるため
 
         def worker():
             try:
@@ -61,8 +61,7 @@ class ConflictDialog(tk.Toplevel):
                 pass
             return
         self.busy = False
-        gc.enable()
-        gc.collect()
+        gcguard.resume()
         kind, value = item
         if kind == "files":
             if value:

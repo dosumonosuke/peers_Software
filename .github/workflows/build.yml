@@ -4,6 +4,11 @@ name: build
 # タグのときは、GitHub の Releases ページにも置く（ログインしなくてもダウンロードできる）。
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "作るリリースの名前（例：v0.2.0）。空なら Releases には置かない"
+        required: false
+        default: ""
   push:
     tags: ["v*"]
 
@@ -50,7 +55,7 @@ jobs:
           path: dist/${{ matrix.file }}
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -60,7 +65,11 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          name: peers Sync ${{ github.ref_name }}
+          # 手動実行のときは、ここでタグも作る（目印を付けるコミットは、実行したコミット）
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          name: peers Sync ${{ inputs.tag || github.ref_name }}
           body: |
             ## ダウンロード
             | パソコン | ファイル |
